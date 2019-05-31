@@ -1,25 +1,14 @@
 zeppelin package
 ================
 
-Submodules
-----------
+Subpackages
+-----------
 
-zeppelin\.cli module
---------------------
+.. toctree::
 
-.. automodule:: zeppelin.cli
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
-zeppelin\.converter module
---------------------------
-
-.. automodule:: zeppelin.converter
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
+    zeppelin.cli
+    zeppelin.converters
+    zeppelin.executors
 
 Module contents
 ---------------
