@@ -23,8 +23,6 @@ def test_header(zc):
                       'tags: ',
                       'created_at: ' + zc.date_created,
                       'updated_at: ' + zc.date_updated,
-                      'tldr: ',
-                      'thumbnail: ',
                       '---']
 
 
@@ -82,11 +80,14 @@ def test_create_md_row_header(zc):
     assert zc.out == ['|test|test2|\n|-|-|']
 
 
-def test_find_message(zc):
+def test_find_image(zc):
     data = 'nothing here'
-    assert zc.find_message(data) is None
-    data = '\u003c?xml version\u003d\"1.0\" encoding\u003d\"utf-8\"'
-    assert zc.find_message(data).group(0) == 'xml version'
+    assert zc.find_image(data) is None
+    data = ('\u003cdiv id\u003d\"inline1\" style\u003d\"height:400px\"\u003e'+
+        '\u003csvg\u003e\u003c/svg\u003e\u003c/div\u003e\n')
+    assert zc.find_image(data) is None # empty svg
+    data = '<svg><text x="0" y="15">Test SVG</text></svg>'
+    assert zc.find_image(data) == data # empty svg
 
 
 def test_process_date_created(zc):
@@ -117,6 +118,7 @@ def test_process_results(zc):
     assert zc.out == []
     paragraph = {
         'result': {
+            'code': 'SUCCESS',
             'msg': ''
         }
     }
@@ -124,9 +126,10 @@ def test_process_results(zc):
     assert zc.out == []
     paragraph = {
         'result': {
+            'code': 'SUCCESS',
             'msg': 'one ring to bring them all',
             'type': 'TEXT'
         }
     }
     zc.process_results(paragraph)
-    assert zc.out == ['one ring to bring them all']
+    assert zc.out == ['```python', '# one ring to bring them all', '```']

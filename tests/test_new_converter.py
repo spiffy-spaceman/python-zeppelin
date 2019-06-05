@@ -23,8 +23,6 @@ def test_header(zc):
                       'tags: ',
                       'created_at: ' + zc.date_created,
                       'updated_at: ' + zc.date_updated,
-                      'tldr: ',
-                      'thumbnail: ',
                       '---']
 
 
@@ -82,11 +80,11 @@ def test_create_md_row_header(zc):
     assert zc.out == ['|test|test2|\n|-|-|']
 
 
-def test_find_message(zc):
+def test_find_image(zc):
     data = 'nothing here'
-    assert zc.find_message(data) is None
+    assert zc.find_image(data) is None
     data = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAfgAAAH4CAYAAACmKP9/A"'
-    assert zc.find_message(data).group(1) == 'iVBORw0KGgoAAAANSUhEUgAAAfgAAAH4CAYAAACmKP9/A'
+    assert zc.find_image(data) == 'iVBORw0KGgoAAAANSUhEUgAAAfgAAAH4CAYAAACmKP9/A'
 
 
 def test_process_date_created(zc):
@@ -124,6 +122,7 @@ def test_process_results(zc):
             'editorMode': 'ace/mode/markdown'
         },
         'results': {
+            'code': 'SUCCESS',
             'msg': [{
                 'type': 'TEXT',
                 'data': 'one ring to bring them all'
@@ -137,6 +136,7 @@ def test_process_results(zc):
             'editorMode': 'ace/mode/r'
         },
         'results': {
+            'code': 'SUCCESS',
             'msg': [{
                 'type': 'TEXT',
                 'data': 'one ring to bring them all'
@@ -144,4 +144,5 @@ def test_process_results(zc):
         }
     }
     zc.process_results(paragraph)
-    assert zc.out == ['one ring to bring them all']
+    assert zc.out == ['```python', '# one ring to bring them all', '```']
+

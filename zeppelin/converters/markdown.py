@@ -7,6 +7,7 @@ import abc
 import os
 import cairosvg
 import re
+import json
 import base64
 from dateutil.parser import parse
 
@@ -19,7 +20,7 @@ class MarkdownConverter(abc.ABC):
         pass
 
     def __init__(self, input_filename, output_filename, directory, user='anonymous',
-                 date_created='N/A', date_updated='N/A'):
+                 date_created='N/A', date_updated='N/A', language=None):
         """Initialize class object with attributes based on CLI inputs."""
         self.index = 0
         self.input_filename = input_filename
@@ -28,13 +29,14 @@ class MarkdownConverter(abc.ABC):
         self.user = user
         self.date_created = date_created
         self.date_updated = date_updated
+        self.language = language
         self.out = []
 
         # To add support for other output types, add the file type to
         # the dictionary and create the necessary function to handle it.
         self.output_options = {
             'HTML': self.build_image,
-            'TEXT': self.build_text,
+            'TEXT': self.build_repl_result,
             'TABLE': self.build_table
         }
 
@@ -46,8 +48,6 @@ class MarkdownConverter(abc.ABC):
                   'tags: ',
                   'created_at: ' + str(self.date_created),
                   'updated_at: ' + str(self.date_updated),
-                  'tldr: ',
-                  'thumbnail: ',
                   '---']
 
         self.out = header + self.out
@@ -71,7 +71,7 @@ class MarkdownConverter(abc.ABC):
             lang, body = paragraph, None
 
         if not lang.strip().startswith('%'):
-            lang = 'scala'
+            lang = self.language if self.language else 'scala'
             body = paragraph.strip()
 
         else:
@@ -80,13 +80,20 @@ class MarkdownConverter(abc.ABC):
         if lang == 'md':
             self.build_markdown(lang, body)
         else:
+            if lang == 'pyspark':
+                lang = 'python'
             self.build_code(lang, body)
 
     def create_md_row(self, row, header=False):
         """Translate row into markdown format."""
         if not row:
             return
-        cols = row.split('\t')
+
+        if isinstance(row, str):
+            cols = row.split('\t')
+        else:
+            cols = row
+
         if len(cols) == 1:
             self.out.append(cols[0])
         else:
@@ -102,6 +109,18 @@ class MarkdownConverter(abc.ABC):
                 self.out.append(col_md + '\n' + underline_md)
             else:
                 self.out.append(col_md)
+
+    def process_config(self, config):
+        """Set default mode to the editorMode language."""
+        if 'editorMode' not in config:
+            return
+
+        mode = config['editorMode']
+
+        if mode == 'ace/mode/scala':
+            self.language = 'scala'
+        elif mode == 'ace/mode/python':
+            self.language = 'python'
 
     def process_date_created(self, text):
         """Set date_created to the oldest date (date created)."""
@@ -155,23 +174,29 @@ class MarkdownConverter(abc.ABC):
             - the input by detecting the editor language
             - the output by detecting the output format
         """
-        key_options = {
-            'dateCreated': self.process_date_created,
-            'dateUpdated': self.process_date_updated,
-            'title': self.process_title,
-            'text': self.process_input
-        }
+        key_options = [
+            ('dateCreated', self.process_date_created),
+            ('dateUpdated', self.process_date_updated),
+            ('title', self.process_title),
+            ('config', self.process_config),
+            ('text', self.process_input)
+        ]
 
         for paragraph in text['paragraphs']:
             if 'user' in paragraph:
                 self.user = paragraph['user']
 
-            for key, handler in key_options.items():
+            for key, handler in key_options:
                 if key in paragraph:
                     handler(paragraph[key])
 
             if self._RESULT_KEY in paragraph:
                 self.process_results(paragraph)
+
+
+    def build_repl_result(self, msg):
+        """Format repl results to look like commented results"""
+        self.build_code('python', '\n'.join(['# ' + m.strip() for m in msg.split("\n")]))
 
     def build_text(self, msg):
         """Add text to output array."""
@@ -179,7 +204,15 @@ class MarkdownConverter(abc.ABC):
 
     def build_table(self, msg):
         """Format each row of the table."""
-        rows = msg.split('\n')
+        try:
+            j = json.loads(msg)
+            if j['exceeded'] != -1:
+                rows = j['data'][:20] # Display only 20 rows
+            else:
+                rows = j['data']
+        except ValueError:
+            rows = msg.split('\n')
+
         if rows:
             header_row, *body_rows = rows
             self.create_md_row(header_row, True)
@@ -192,7 +225,7 @@ class MarkdownConverter(abc.ABC):
         Strips msg of the base64 image encoding and outputs
         the images to the specified directory.
         """
-        result = self.find_message(msg)
+        result = self.find_image(msg)
 
         if result is None:
             return
@@ -207,17 +240,17 @@ class MarkdownConverter(abc.ABC):
             os.makedirs(images_path)
 
         with open('{0}/output_{1}.png'.format(images_path, self.index), 'wb') as fh:
-            self.write_image_to_disk(msg, result, fh)
+            self.write_image_to_disk(result, fh)
 
         self.out.append(
             '\n![png]({0}/output_{1}.png)\n'.format(images_path, self.index))
 
     @abc.abstractmethod
-    def find_message(self, msg):
+    def find_image(self, msg):
         """Use regex to find encoded image."""
 
     @abc.abstractmethod
-    def write_image_to_disk(self, msg, result, fh):
+    def write_image_to_disk(self, result, fh):
         """Decode message to PNG and write to disk."""
 
     @abc.abstractmethod
@@ -230,19 +263,32 @@ class LegacyConverter(MarkdownConverter):
 
     _RESULT_KEY = 'result'
 
-    def find_message(self, msg):
-        """Use regex to find encoded image."""
-        return re.search('xml version', msg)
+    _XML_HEADER = ('\u003c?xml version\u003d\"1.0\" encoding\u003d\"utf-8\" standalone\u003d\"no\"?\u003e\n' +
+                   '\u003c!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\"\n' +
+                   '  \"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\"\u003e\n')
 
-    def write_image_to_disk(self, msg, result, fh):
+
+    def find_image(self, msg):
+        """Use regex to find encoded image."""
+        result = re.search('(?s)<svg.*</svg>', msg)
+        if not result or result.group(0) == '<svg></svg>':
+            return None
+
+        return result.group(0)
+
+    def write_image_to_disk(self, result, fh):
         """Decode message to PNG and write to disk."""
-        cairosvg.svg2png(bytestring=msg.encode('utf-8'), write_to=fh)
+        img = self._XML_HEADER + result
+        cairosvg.svg2png(bytestring=img.encode('utf-8'), write_to=fh)
 
     def process_results(self, paragraph):
         """Route Zeppelin output types to corresponding handlers."""
-        if 'result' in paragraph and paragraph['result']['msg']:
+        if 'result' in paragraph and paragraph['result']['code'] == 'SUCCESS' and paragraph['result']['msg']:
             msg = paragraph['result']['msg']
-            self.output_options[paragraph['result']['type']](msg)
+            if paragraph['result']['type'] in self.output_options:
+                self.output_options[paragraph['result']['type']](msg)
+        elif 'result' in paragraph and paragraph['result']['code'] == 'ERROR':
+            self.out.append(':heavy_exclamation_mark:')
 
 
 class NewConverter(MarkdownConverter):
@@ -250,19 +296,23 @@ class NewConverter(MarkdownConverter):
 
     _RESULT_KEY = 'results'
 
-    def find_message(self, msg):
+    def find_image(self, msg):
         """Use regex to find encoded image."""
-        return re.search('base64,(.*?)"', msg)
+        result = re.search('base64,(.*?)"', msg)
+        if not result:
+            return None
 
-    def write_image_to_disk(self, msg, result, fh):
+        return result.group(1)
+
+    def write_image_to_disk(self, result, fh):
         """Decode message to PNG and write to disk."""
-        fh.write(base64.b64decode(result.group(1).encode('utf-8')))
+        fh.write(base64.b64decode(result.encode('utf-8')))
 
     def process_results(self, paragraph):
         """Routes Zeppelin output types to corresponding handlers."""
         if 'editorMode' in paragraph['config']:
             mode = paragraph['config']['editorMode'].split('/')[-1]
-            if 'results' in paragraph and paragraph['results']['msg']:
+            if 'results' in paragraph and paragraph['results']['code'] == 'SUCCESS' and paragraph['results']['msg']:
                 msg = paragraph['results']['msg'][0]
-                if mode not in ('text', 'markdown'):
+                if mode not in ('text', 'markdown') and msg['type'] in self.output_options:
                     self.output_options[msg['type']](msg['data'])
