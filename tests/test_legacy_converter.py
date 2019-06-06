@@ -20,16 +20,15 @@ def test_header(zc):
     assert zc.out == ['---',
                       'title: title',
                       'author(s): tester',
-                      'tags: ',
                       'created_at: ' + zc.date_created,
                       'updated_at: ' + zc.date_updated,
                       '---']
 
 
 def test_build_markdown(zc):
-    zc.build_markdown('scala', None)
+    zc.build_markdown(None)
     assert zc.out == []
-    zc.build_markdown('scala', 'sample body')
+    zc.build_markdown('sample body')
     assert zc.out == ['sample body']
 
 
@@ -41,15 +40,15 @@ def test_build_code(zc):
                       '```scala', 'sample body', '```']
 
 
-@pytest.mark.parametrize('test_input, expected', [
-                         ('%md', []),
-                         ('%md text', ['text']),
-                         (' %md   text', ['text']),
-                         (' sample text', ['```scala', 'sample text', '```']),
-                         ('s%ample', ['```scala', 's%ample', '```'])])
-def test_process_input(zc, test_input, expected):
-    zc.process_input(test_input)
-    assert zc.out == expected
+@pytest.mark.parametrize('test_input, expected_lang, expected_body', [
+                         ('%md', 'md', None),
+                         ('%md text', 'md', 'text'),
+                         (' %md   text', 'md', 'text'),
+                         (' sample text', 'scala', 'sample text'),
+                         ('s%ample', 'scala', 's%ample')])
+def test_parse_input_text(zc, test_input, expected_lang, expected_body):
+    lang, body = zc.parse_input_text(test_input)
+    assert (lang, body) == (expected_lang, expected_body)
 
 
 def test_build_text(zc):
@@ -132,4 +131,5 @@ def test_process_results(zc):
         }
     }
     zc.process_results(paragraph)
-    assert zc.out == ['```python', '# one ring to bring them all', '```']
+    assert zc.out == ['```python', '# Output:\n# -------\n# one ring to bring them all', '```']
+

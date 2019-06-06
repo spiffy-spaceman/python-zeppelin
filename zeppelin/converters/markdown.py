@@ -35,7 +35,8 @@ class MarkdownConverter(abc.ABC):
         # To add support for other output types, add the file type to
         # the dictionary and create the necessary function to handle it.
         self.output_options = {
-            'HTML': self.build_image,
+            'HTML': self.build_html,
+            'ANGULAR': self.build_html,
             'TEXT': self.build_repl_result,
             'TABLE': self.build_table
         }
@@ -45,14 +46,13 @@ class MarkdownConverter(abc.ABC):
         header = ['---',
                   'title: ' + title,
                   'author(s): ' + self.user,
-                  'tags: ',
                   'created_at: ' + str(self.date_created),
                   'updated_at: ' + str(self.date_updated),
                   '---']
 
         self.out = header + self.out
 
-    def build_markdown(self, lang, body):
+    def build_markdown(self, body):
         """Append paragraphs body to output string."""
         if body is not None:
             self.out.append(body)
@@ -60,11 +60,11 @@ class MarkdownConverter(abc.ABC):
     def build_code(self, lang, body):
         """Wrap text with markdown specific flavour."""
         self.out.append("```" + lang)
-        self.build_markdown(lang, body)
+        self.build_markdown(body)
         self.out.append("```")
 
-    def process_input(self, paragraph):
-        """Parse paragraph for the language of the code and the code itself."""
+    def parse_input_text(self, paragraph):
+        """Parse and split text from the declared language format"""
         try:
             lang, body = paragraph.split(None, 1)
         except ValueError:
@@ -73,16 +73,17 @@ class MarkdownConverter(abc.ABC):
         if not lang.strip().startswith('%'):
             lang = self.language if self.language else 'scala'
             body = paragraph.strip()
-
         else:
             lang = lang.strip()[1:]
 
-        if lang == 'md':
-            self.build_markdown(lang, body)
-        else:
-            if lang == 'pyspark':
-                lang = 'python'
-            self.build_code(lang, body)
+        if lang == 'pyspark':
+            lang = 'python'
+        elif lang == 'spark' or lang == 'dep':
+            lang = 'scala'
+        elif lang == 'angular':
+            lang = 'html'
+
+        return lang, body
 
     def create_md_row(self, row, header=False):
         """Translate row into markdown format."""
@@ -121,6 +122,8 @@ class MarkdownConverter(abc.ABC):
             self.language = 'scala'
         elif mode == 'ace/mode/python':
             self.language = 'python'
+        elif mode == 'ace/mode/markdown':
+            self.language = 'markdown'
 
     def process_date_created(self, text):
         """Set date_created to the oldest date (date created)."""
@@ -173,13 +176,14 @@ class MarkdownConverter(abc.ABC):
             - the date the notebook was last updated
             - the input by detecting the editor language
             - the output by detecting the output format
+
+        - Don't render output if input language is markdown
         """
         key_options = [
             ('dateCreated', self.process_date_created),
             ('dateUpdated', self.process_date_updated),
             ('title', self.process_title),
-            ('config', self.process_config),
-            ('text', self.process_input)
+            ('config', self.process_config)
         ]
 
         for paragraph in text['paragraphs']:
@@ -190,13 +194,24 @@ class MarkdownConverter(abc.ABC):
                 if key in paragraph:
                     handler(paragraph[key])
 
-            if self._RESULT_KEY in paragraph:
+            is_markdown = False
+            if 'text' in paragraph:
+                lang, body = self.parse_input_text(paragraph['text'])
+                if lang == 'md':
+                    self.build_markdown(body)
+                    is_markdown = True
+                else:
+                    self.build_code(lang, body)
+
+            if not is_markdown and self._RESULT_KEY in paragraph:
                 self.process_results(paragraph)
 
 
     def build_repl_result(self, msg):
         """Format repl results to look like commented results"""
-        self.build_code('python', '\n'.join(['# ' + m.strip() for m in msg.split("\n")]))
+        self.build_code('python', '\n'.join(
+            ['# Output:', '# -------'] +
+            ['# ' + m.strip() for m in msg.split('\n')]))
 
     def build_text(self, msg):
         """Add text to output array."""
@@ -206,20 +221,18 @@ class MarkdownConverter(abc.ABC):
         """Format each row of the table."""
         try:
             j = json.loads(msg)
-            if j['exceeded'] != -1:
-                rows = j['data'][:20] # Display only 20 rows
-            else:
-                rows = j['data']
+            rows = j['data']
         except ValueError:
             rows = msg.split('\n')
 
         if rows:
+            rows = rows[:22] # Display top ~20 rows including header
             header_row, *body_rows = rows
             self.create_md_row(header_row, True)
             for row in body_rows:
                 self.create_md_row(row)
 
-    def build_image(self, msg):
+    def build_html(self, msg):
         """Convert base64 encoding to png.
 
         Strips msg of the base64 image encoding and outputs
@@ -228,6 +241,8 @@ class MarkdownConverter(abc.ABC):
         result = self.find_image(msg)
 
         if result is None:
+            if not re.search('markdown-body', msg):
+                self.build_text(msg)
             return
 
         self.index += 1
@@ -235,6 +250,8 @@ class MarkdownConverter(abc.ABC):
 
         if self.directory:
             images_path = os.path.join(self.directory, images_path)
+
+        images_path = os.path.join(images_path, self.output_filename) # Create a subfolder to handle many files
 
         if not os.path.isdir(images_path):
             os.makedirs(images_path)
@@ -289,6 +306,8 @@ class LegacyConverter(MarkdownConverter):
                 self.output_options[paragraph['result']['type']](msg)
         elif 'result' in paragraph and paragraph['result']['code'] == 'ERROR':
             self.out.append(':heavy_exclamation_mark:')
+            if 'msg' in paragraph['result'] and paragraph['result']['msg']:
+                self.build_repl_result(paragraph['result']['msg'])
 
 
 class NewConverter(MarkdownConverter):
